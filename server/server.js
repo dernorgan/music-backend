@@ -14,17 +14,28 @@ app.use('/music', express.static(musicDir));
 
 app.use(cors());
 
+app.get('/', (req, res) => {
+    res.send('Ласкаво просимо на мій аудіо-сервер!');
+});
+
 // API для списку
 app.get('/api/music-list', (req, res) => {
     fs.readdir(musicDir, (err, files) => {
         if (err) return res.status(500).json({ error: 'Помилка читання папки' });
 
-        const audioFiles = files.filter(file =>
-            ['.mp3', '.wav', '.ogg'].includes(path.extname(file).toLowerCase())
-        );
+        const supportedFormats = ['.mp3', '.wav', '.ogg'];
 
-        // const urls = audioFiles.map(file => `/music/${file}`);
-        res.json(audioFiles);
+        const parsedAudioFiles = files
+            .filter(file => supportedFormats.includes(path.extname(file).toLowerCase()))
+            .map(file => {
+                const ext = path.extname(file);
+                const name = path.basename(file, ext);
+                return {
+                    name,
+                    format: ext.slice(1), // прибираємо крапку
+                };
+            });
+        res.json(parsedAudioFiles);
     });
 });
 
