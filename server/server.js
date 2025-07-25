@@ -4,17 +4,27 @@ const fs = require('fs');
 const path = require('path');
 const NodeCache = require('node-cache');
 const mm = require('music-metadata');
+const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const musicDir = path.join(__dirname, '..', 'public');
+const musicDir = path.join(__dirname, '..', 'public', 'track');
 const cache = new NodeCache({ stdTTL: 3600, checkperiod: 600 });
 
+const allowedOrigins = ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175', 'http://localhost:5176', 'https://your-frontend-domain.com'];
 app.use(cors({
-    origin: ['http://localhost:5173', 'https://your-frontend-domain.com'],
+    origin: function(origin, callback){
+        // Дозволити запити з allowedOrigins або без origin (наприклад, curl)
+        if(!origin) return callback(null, true);
+        if(allowedOrigins.indexOf(origin) === -1){
+            const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+            return callback(new Error(msg), false);
+        }
+        return callback(null, true);
+    },
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    // allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true,
 }));
 
@@ -39,6 +49,7 @@ app.get('/api/music-list', async (req, res) => {
     }
 });
 
+
 async function processAudioFile(file) {
     const cacheKey = `metadata_${file}`;
     let metadata = cache.get(cacheKey);
@@ -57,6 +68,7 @@ async function processAudioFile(file) {
                 : null;
 
             metadata = {
+                id: uuidv4(),
                 title: title || path.basename(file, path.extname(file)),
                 artist: artist || 'Unknown Artist',
                 album: album || '',
@@ -72,6 +84,7 @@ async function processAudioFile(file) {
     }
 
     return {
+        id: metadata.id,
         name: metadata.title,
         artist: metadata.artist,
         album: metadata.album,
