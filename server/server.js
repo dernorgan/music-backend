@@ -5,35 +5,52 @@ const path = require('path');
 const NodeCache = require('node-cache');
 const mm = require('music-metadata');
 const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
+const sharp = require('sharp'); // 🔧 додаємо sharp
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 const musicDir = path.join(__dirname, '..', 'public', 'track');
+const coversDir = path.join(__dirname, '..', 'public', 'covers');
 const cache = new NodeCache({ stdTTL: 3600, checkperiod: 600 });
 
-const allowedOrigins = ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175', 'http://localhost:5176', 'https://your-frontend-domain.com'];
+// Створення директорії для обкладинок, якщо не існує
+if (!fs.existsSync(coversDir)) {
+    fs.mkdirSync(coversDir, { recursive: true });
+}
+
+// CORS політика
+const allowedOrigins = [
+    'http://localhost:5173',
+    'http://localhost:5174',
+    'http://localhost:5175',
+    'http://localhost:5176',
+    'https://your-frontend-domain.com',
+];
 app.use(cors({
-    origin: function(origin, callback){
-        // Дозволити запити з allowedOrigins або без origin (наприклад, curl)
-        if(!origin) return callback(null, true);
-        if(allowedOrigins.indexOf(origin) === -1){
+    origin: function (origin, callback) {
+        if (!origin) return callback(null, true);
+        if (allowedOrigins.indexOf(origin) === -1) {
             const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
             return callback(new Error(msg), false);
         }
         return callback(null, true);
     },
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
-    // allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true,
 }));
 
+// Статичні файли
 app.use('/music', express.static(musicDir));
+app.use('/covers', express.static(coversDir));
 
+// Головна сторінка
 app.get('/', (req, res) => {
     res.send('🎶 Ласкаво просимо на мій аудіо-сервер!');
 });
 
+// Головний API
 app.get('/api/music-list', async (req, res) => {
     try {
         const files = await fs.promises.readdir(musicDir);
@@ -49,7 +66,7 @@ app.get('/api/music-list', async (req, res) => {
     }
 });
 
-
+// Обробка одного аудіофайлу
 async function processAudioFile(file) {
     const cacheKey = `metadata_${file}`;
     let metadata = cache.get(cacheKey);
@@ -63,9 +80,24 @@ async function processAudioFile(file) {
             const duration = formatDuration(format.duration);
             const [cover] = picture;
 
-            const pictureData = cover?.data && cover?.format
-                ? `data:${cover.format};base64,${Buffer.from(cover.data).toString('base64')}`
-                : null;
+            let pictureUrl = null;
+
+            if (cover?.data && cover?.format) {
+                const hash = crypto.createHash('md5').update(cover.data).digest('hex');
+                const ext = 'jpg';
+                const fileName = `cover-${hash}.${ext}`;
+                const coverPath = path.join(coversDir, fileName);
+
+                if (!fs.existsSync(coverPath)) {
+                    // 🧠 Зменшуємо розмір і стискаємо
+                    await sharp(cover.data)
+                        .resize(360)
+                        .toFormat('jpeg', { quality: 80 })
+                        .toFile(coverPath);
+                }
+
+                pictureUrl = `/covers/${fileName}`;
+            }
 
             metadata = {
                 id: uuidv4(),
@@ -73,7 +105,7 @@ async function processAudioFile(file) {
                 artist: artist || 'Unknown Artist',
                 album: album || '',
                 duration,
-                picture: pictureData,
+                picture: pictureUrl,
             };
 
             cache.set(cacheKey, metadata);
@@ -92,10 +124,11 @@ async function processAudioFile(file) {
         file,
         format: path.extname(file).slice(1),
         url: `/music/${file}`,
-        picture: metadata.picture,
+        picture: metadata.picture || '/covers/default.jpg',
     };
 }
 
+// Форматування тривалості
 function formatDuration(seconds) {
     if (!seconds || isNaN(seconds)) return '0:00';
     const mins = Math.floor(seconds / 60);
@@ -103,6 +136,7 @@ function formatDuration(seconds) {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
+// Метадані за замовчуванням
 function getDefaultMetadata(file) {
     return {
         title: path.basename(file, path.extname(file)),
@@ -113,6 +147,7 @@ function getDefaultMetadata(file) {
     };
 }
 
+// Запуск сервера
 app.listen(PORT, () => {
     console.log(`✅ Сервер запущено на порті ${PORT}`);
 });
