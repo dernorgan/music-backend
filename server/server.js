@@ -91,7 +91,7 @@ async function processAudioFile(file) {
                 if (!fs.existsSync(coverPath)) {
                     // 🧠 Зменшуємо розмір і стискаємо
                     await sharp(cover.data)
-                        .resize(360)
+                        .resize(600)
                         .toFormat('jpeg', { quality: 80 })
                         .toFile(coverPath);
                 }
