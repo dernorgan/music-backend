@@ -1,24 +1,22 @@
 const express = require('express');
+const {createClient} = require('@supabase/supabase-js');
+require('dotenv').config();
 const cors = require('cors');
-const fs = require('fs');
-const path = require('path');
+const multer = require('multer');
+const upload = multer();
 const NodeCache = require('node-cache');
-const mm = require('music-metadata');
-const { v4: uuidv4 } = require('uuid');
-const crypto = require('crypto');
-const sharp = require('sharp'); // 🔧 додаємо sharp
+
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const port = 3000;
 
-const musicDir = path.join(__dirname, '..', 'public', 'track');
-const coversDir = path.join(__dirname, '..', 'public', 'covers');
-const cache = new NodeCache({ stdTTL: 3600, checkperiod: 600 });
+// Підключення до Supabase
+const supabase = createClient(
+    process.env.SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
-// Створення директорії для обкладинок, якщо не існує
-if (!fs.existsSync(coversDir)) {
-    fs.mkdirSync(coversDir, { recursive: true });
-}
+const cache = new NodeCache({ stdTTL: 720 }); // TTL 60 сек, можна змінити
 
 // CORS політика
 const allowedOrigins = [
@@ -28,6 +26,7 @@ const allowedOrigins = [
     'http://localhost:5176',
     'https://your-frontend-domain.com',
 ];
+
 app.use(cors({
     origin: function (origin, callback) {
         if (!origin) return callback(null, true);
@@ -41,113 +40,111 @@ app.use(cors({
     credentials: true,
 }));
 
-// Статичні файли
-app.use('/music', express.static(musicDir));
-app.use('/covers', express.static(coversDir));
-
-// Головна сторінка
 app.get('/', (req, res) => {
     res.send('🎶 Ласкаво просимо на мій аудіо-сервер!');
 });
 
-// Головний API
-app.get('/api/music-list', async (req, res) => {
-    try {
-        const files = await fs.promises.readdir(musicDir);
-        const audioFiles = files.filter(file =>
-            ['.mp3', '.wav', '.ogg'].includes(path.extname(file).toLowerCase())
-        );
+const BUCKET = 'uploads'; // ← назва бакета (чутлива до регістру)
 
-        const parsedAudioFiles = await Promise.all(audioFiles.map(processAudioFile));
-        res.json(parsedAudioFiles);
+
+const FOLDER = 'files-music'; // твоя папка в бакеті
+
+app.get('/files', async (req, res) => {
+    try {
+        const PAGE_SIZE = 14;
+        const page = parseInt(req.query.page) || 1;
+        const cacheKey = `files-page-${page}`;
+
+        // Перевірка кешу
+        const cached = cache.get(cacheKey);
+        if (cached) {
+            return res.json({ files: cached });
+        }
+
+        let offset = (page - 1) * PAGE_SIZE;
+        const signedFiles = [];
+        const fetchChunkSize = 14;
+
+        while (signedFiles.length < PAGE_SIZE) {
+            const { data: files, error } = await supabase.storage.from(BUCKET).list(FOLDER, {
+                limit: fetchChunkSize,
+                offset,
+                sortBy: { column: 'name', order: 'asc' }
+            });
+
+            if (error) throw new Error(error.message);
+            if (!files || files.length === 0) break;
+
+            for (const file of files) {
+                if (signedFiles.length >= PAGE_SIZE) break;
+
+                try {
+                    const filePath = `${FOLDER}/${file.name}`;
+                    const { data: signed, error: signError } = await supabase
+                        .storage
+                        .from(BUCKET)
+                        .createSignedUrl(filePath, 360); // 6 хв
+
+                    if (signError) continue;
+
+                    signedFiles.push({
+                        name: file.name,
+                        url: signed.signedUrl
+                    });
+                } catch {
+                    continue;
+                }
+            }
+
+            offset += fetchChunkSize;
+        }
+
+        // Кешуємо результат
+        cache.set(cacheKey, signedFiles);
+
+        res.json({ files: signedFiles });
     } catch (err) {
-        console.error('❌ Error reading music directory:', err.message);
-        res.status(500).json({ error: 'Помилка читання аудіо файлів' });
+        console.error(err);
+        res.status(500).json({ error: err.message });
     }
 });
 
-// Обробка одного аудіофайлу
-async function processAudioFile(file) {
-    const cacheKey = `metadata_${file}`;
-    let metadata = cache.get(cacheKey);
 
-    if (!metadata) {
-        const filePath = path.join(musicDir, file);
+app.post('/upload', upload.array('files', 10), async (req, res) => {
+    const files = req.files;
+    if (!files || files.length === 0) {
+        return res.status(400).send('No files uploaded.');
+    }
 
-        try {
-            const { common, format } = await mm.parseFile(filePath);
-            const { title, artist, album, picture = [] } = common;
-            const duration = formatDuration(format.duration);
-            const [cover] = picture;
+    // Завантажуємо файли по черзі (або паралельно)
+    const results = [];
 
-            let pictureUrl = null;
+    for (const file of files) {
+        const filePath = `${FOLDER}/${file.originalname}`;
+        const { data, error } = await supabase
+            .storage
+            .from('uploads')
+            .upload(filePath, file.buffer, {
+                contentType: file.mimetype,
+            });
 
-            if (cover?.data && cover?.format) {
-                const hash = crypto.createHash('md5').update(cover.data).digest('hex');
-                const ext = 'jpg';
-                const fileName = `cover-${hash}.${ext}`;
-                const coverPath = path.join(coversDir, fileName);
-
-                if (!fs.existsSync(coverPath)) {
-                    // 🧠 Зменшуємо розмір і стискаємо
-                    await sharp(cover.data)
-                        .resize(600)
-                        .toFormat('jpeg', { quality: 80 })
-                        .toFile(coverPath);
-                }
-
-                pictureUrl = `/covers/${fileName}`;
-            }
-
-            metadata = {
-                id: uuidv4(),
-                title: title || path.basename(file, path.extname(file)),
-                artist: artist || 'Unknown Artist',
-                album: album || '',
-                duration,
-                picture: pictureUrl,
-            };
-
-            cache.set(cacheKey, metadata);
-        } catch (err) {
-            console.error(`❌ Metadata error for ${file}:`, err.message);
-            metadata = getDefaultMetadata(file);
+        if (error) {
+            results.push({ name: file.originalname, error: error.message });
+        } else {
+            results.push({ name: file.originalname, data });
         }
     }
 
-    return {
-        id: metadata.id,
-        name: metadata.title,
-        artist: metadata.artist,
-        album: metadata.album,
-        duration: metadata.duration,
-        file,
-        format: path.extname(file).slice(1),
-        url: `/music/${file}`,
-        picture: metadata.picture || '/covers/default.jpg',
-    };
-}
+    res.json({ results });
+});
 
-// Форматування тривалості
-function formatDuration(seconds) {
-    if (!seconds || isNaN(seconds)) return '0:00';
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-}
+app.get('/all-music-files', async (req, res) => {
+    const { data: files, error } = await supabase.storage.from(BUCKET).list(FOLDER, { limit: 20 });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(files);
+});
 
-// Метадані за замовчуванням
-function getDefaultMetadata(file) {
-    return {
-        title: path.basename(file, path.extname(file)),
-        artist: 'Unknown Artist',
-        album: '',
-        duration: '0:00',
-        picture: null,
-    };
-}
 
-// Запуск сервера
-app.listen(PORT, () => {
-    console.log(`✅ Сервер запущено на порті ${PORT}`);
+app.listen(port, () => {
+    console.log(`✅ Server running: http://localhost:${port}/files`);
 });
