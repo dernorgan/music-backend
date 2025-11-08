@@ -8,7 +8,7 @@ const { v4: uuidv4 } = require('uuid');
 const BUCKET = 'uploads';
 const FOLDER = 'files-music';
 
-router.get('/files', async (req, res) => {
+router.get('/musics', async (req, res) => {
     try {
         const PAGE_SIZE = 15;
         const page = parseInt(req.query.page) || 1;
