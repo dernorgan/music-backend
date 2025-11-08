@@ -12,6 +12,8 @@ const BUCKET = 'uploads'; // ОДИН бакет
 const AUDIO_FOLDER = 'musics';  // папка для музики
 const COVER_FOLDER = 'covers';  // папка для обкладинок
 
+const SUPABASE_PUBLIC_URL_BASE = `${process.env.SUPABASE_URL}/storage/v1/object/public/${BUCKET}/`;
+
 async function processAudioFile(fileName) {
     try {
         // Повний шлях до аудіофайлу в бакеті
@@ -34,7 +36,7 @@ async function processAudioFile(fileName) {
         const duration = format.duration || 0;
 
         // Обробка обкладинки
-        let pictureUrl = '/covers/default.jpg';
+        let pictureUrl;
         const [cover] = picture;
 
         if (cover?.data && cover?.format) {
@@ -47,12 +49,12 @@ async function processAudioFile(fileName) {
             const coverFileName = `cover-${hash}.jpeg`;
             const coverFilePath = `${COVER_FOLDER}/${coverFileName}`;
 
-            // Завантаження обкладинки в Supabase
             await uploadFileToBucket(BUCKET, coverFilePath, coverBuffer, 'image/jpeg');
-            pictureUrl = await getPublicUrl(BUCKET, coverFilePath);
+            pictureUrl = SUPABASE_PUBLIC_URL_BASE + coverFilePath;
         }
 
-        return {
+        // Формуємо базовий обʼєкт
+        const track = {
             id: uuidv4(),
             name: title || fileName,
             artist: artist || 'Unknown Artist',
@@ -60,9 +62,15 @@ async function processAudioFile(fileName) {
             duration: `${Math.floor(duration / 60)}:${Math.floor(duration % 60).toString().padStart(2, '0')}`,
             file: audioFilePath,
             format: fileName.split('.').pop(),
-            url: await getPublicUrl(BUCKET, audioFilePath),
-            picture: pictureUrl,
+            url: SUPABASE_PUBLIC_URL_BASE + audioFilePath,
         };
+
+        // Якщо є картинка — додаємо поле picture
+        if (pictureUrl) {
+            track.picture = pictureUrl;
+        }
+
+        return track;
     } catch (err) {
         console.error(`❌ Metadata error for ${fileName}:`, err.message);
 
@@ -76,8 +84,7 @@ async function processAudioFile(fileName) {
             duration: '0:00',
             file: audioFilePath,
             format: fileName.split('.').pop(),
-            url: await getPublicUrl(BUCKET, audioFilePath),
-            picture: '/covers/default.jpg',
+            url: SUPABASE_PUBLIC_URL_BASE + audioFilePath,
         };
     }
 }
