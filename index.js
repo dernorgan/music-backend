@@ -5,7 +5,7 @@ const cors = require('./middleware/cors');
 app.use(cors()); // ← викликаємо функцію!
 
 const fileRoutes = require('./routes/files');
-const uploadRoutes = require('./routes/upload');
+const uploadRoutes = require('./routes/uploadMusic');
 const databaseRoutes = require('./routes/database');
 
 app.use(express.json());
