@@ -30,3 +30,6 @@ coverage
 *.sw?
 
 *.tsbuildinfo
+
+serviceAccountKey.json
+test.http

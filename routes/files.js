@@ -40,7 +40,7 @@ router.get('/files', async (req, res) => {
                 const { data: signed, error: signError } = await supabase
                     .storage
                     .from(BUCKET)
-                    .createSignedUrl(filePath, 360);
+                    .createSignedUrl(filePath, 3600);
 
                 if (!signError) {
                     signedFiles.push({
